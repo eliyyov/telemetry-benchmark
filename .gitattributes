@@ -1,0 +1,17 @@
+# Everything is LF in the working tree, on every OS.
+# Windows checkouts (core.autocrlf=true) otherwise turn scripts into CRLF and
+# Terraform ships the broken files to VM-Mon: /usr/bin/env: 'bash\r': No such file or directory
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.py    text eol=lf
+*.tf    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.tftpl text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+
+*.pem   binary
+*.png   binary
+*.zip   binary
