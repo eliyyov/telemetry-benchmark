@@ -1,0 +1,13 @@
+#cloud-config
+# VM-Data: Docker + tools. Background jobs that could add noise during measurement are disabled.
+hostname: vm-data
+package_update: true
+packages: [docker.io, docker-compose-v2, rsync, python3, jq, util-linux, tmux]
+ssh_authorized_keys:
+  - ${internal_pub}
+runcmd:
+  - usermod -aG docker ubuntu
+  - systemctl enable --now docker
+  - systemctl disable --now unattended-upgrades.service apt-daily.timer apt-daily-upgrade.timer || true
+  - systemctl mask --now snapd.service snapd.socket || true
+  - mkdir -p /home/ubuntu/bench && chown ubuntu:ubuntu /home/ubuntu/bench

@@ -1,0 +1,16 @@
+# secrets - never commit
+operator_key.pem
+terraform/terraform.tfvars
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/.terraform/
+terraform/build/
+
+# regenerable / bulky run data
+bench/logs/
+bench/raw_metrics/
+__pycache__/
+*.pyc
+
+# results ARE committed (thesis data), raw_metrics stays out
+!bench/results/

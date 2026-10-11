@@ -1,0 +1,21 @@
+# cAdvisor on VM-Data (cross-check V5/V6). Pinned to core 1, away from the agent cores 2-3.
+services:
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.6
+    container_name: cadvisor
+    network_mode: host
+    cpuset: "1"
+    privileged: true
+    devices: ["/dev/kmsg"]
+    restart: unless-stopped
+    command:
+      - "--docker_only=true"
+      - "--housekeeping_interval=1s"
+      - "--store_container_labels=false"
+      - "--disable_metrics=advtcp,cpu_topology,cpuset,hugetlb,memory_numa,process,referenced_memory,resctrl,sched,tcp,udp,percpu,disk,diskIO"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro

@@ -1,0 +1,15 @@
+# Arm O on VM-Data. 2 pinned cores (cpuset), no CPU quota on purpose, 1536 MiB ceiling.
+services:
+  otel:
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    container_name: o-otel
+    network_mode: host
+    cpuset: "${AGENT_CPUSET:-2-3}"
+    mem_limit: 1536m
+    user: "0:0"
+    restart: "no"
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./configs/otel.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ./logs:/logs:ro
+      - /:/hostfs:ro

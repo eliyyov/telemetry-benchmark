@@ -1,0 +1,18 @@
+# Arm V on VM-Data. 2 pinned cores (cpuset), no CPU quota on purpose, 1536 MiB ceiling.
+services:
+  vector:
+    image: timberio/vector:0.59.0-debian
+    container_name: v-vector
+    network_mode: host
+    cpuset: "${AGENT_CPUSET:-2-3}"
+    mem_limit: 1536m
+    user: "0:0"
+    restart: "no"
+    command: ["--config", "/etc/vector/vector.yaml"]
+    environment:
+      PROCFS_ROOT: /hostfs/proc
+      SYSFS_ROOT: /hostfs/sys
+    volumes:
+      - ./configs/vector.yaml:/etc/vector/vector.yaml:ro
+      - ./logs:/logs:ro
+      - /:/hostfs:ro

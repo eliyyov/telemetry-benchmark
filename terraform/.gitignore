@@ -1,0 +1,6 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+operator_key.pem
+build/

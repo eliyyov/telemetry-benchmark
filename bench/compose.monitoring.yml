@@ -1,0 +1,28 @@
+# VM-Mon. Both UIs are bound to localhost only; reach them through an SSH tunnel.
+services:
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    container_name: prometheus
+    restart: unless-stopped
+    ports: ["127.0.0.1:9090:9090"]
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+    volumes:
+      - ./configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom-data:/prometheus
+  grafana:
+    image: grafana/grafana:13.2.3
+    container_name: grafana
+    restart: unless-stopped
+    ports: ["127.0.0.1:3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./configs/grafana-datasource.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+      - ${HOME}/.grafana_admin_password:/run/secrets/grafana_admin:ro
+      - grafana-data:/var/lib/grafana
+volumes:
+  prom-data:
+  grafana-data:

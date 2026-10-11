@@ -1,0 +1,32 @@
+#cloud-config
+# VM-Mon: Docker for Prometheus/Grafana, plus an SSH alias "data" pointing to VM-Data.
+hostname: vm-mon
+package_update: true
+packages: [docker.io, docker-compose-v2, rsync, python3, jq, tmux, unzip]
+write_files:
+  - path: /home/ubuntu/.ssh/data_key
+    encoding: b64
+    content: ${internal_key_b64}
+    owner: ubuntu:ubuntu
+    permissions: "0600"
+    defer: true
+  - path: /home/ubuntu/.ssh/config
+    owner: ubuntu:ubuntu
+    permissions: "0600"
+    defer: true
+    content: |
+      Host data
+        HostName ${data_ip}
+        User ubuntu
+        IdentityFile ~/.ssh/data_key
+        StrictHostKeyChecking accept-new
+        ServerAliveInterval 30
+  - path: /home/ubuntu/.bench_env
+    owner: ubuntu:ubuntu
+    permissions: "0644"
+    defer: true
+    content: |
+      DATA_IP=${data_ip}
+runcmd:
+  - usermod -aG docker ubuntu
+  - systemctl enable --now docker
