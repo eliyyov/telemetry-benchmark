@@ -67,5 +67,5 @@ echo "$targets" | grep -q "cadvisor: up" || echo "  [warn] cadvisor target not u
 echo
 echo "Setup complete. Next:"
 echo "  ./run.sh                                  # interactive menu (smoke run first)"
-echo "  ssh -L 3000:127.0.0.1:3000 \$(hostname -I | awk '{print \$1}')  # Grafana tunnel is in 'terraform output grafana_tunnel'"
+echo "  Grafana tunnel (from your PC): see 'terraform output grafana_tunnel'"
 echo "  Grafana: http://localhost:3000  admin / \$(cat ~/.grafana_admin_password)"
