@@ -50,11 +50,11 @@ ok "bundle synced, images pulled (Vector 0.59.0-debian, OTel 0.162.0, cAdvisor 0
 
 echo "== 5/6 cAdvisor on VM-Data (core 1) =="
 ssh -o BatchMode=yes data 'cd bench && (docker compose -f compose.cadvisor.yml up -d >/dev/null 2>&1 || sg docker -c "docker compose -f compose.cadvisor.yml up -d" >/dev/null)'
-for i in $(seq 1 30); do
-  curl -sf "http://$DATA_IP:8080/metrics" >/dev/null 2>&1 && break; sleep 2
+for i in $(seq 1 60); do
+  curl -sf "http://$DATA_IP:8080/metrics" 2>/dev/null | grep -q container_cpu_usage_seconds_total && break; sleep 2
 done
 curl -sf "http://$DATA_IP:8080/metrics" | grep -q container_cpu_usage_seconds_total \
-  || bad "cAdvisor not exposing container metrics on $DATA_IP:8080"
+  || bad "cAdvisor not exposing container metrics on $DATA_IP:8080 after 120s (check 'ssh data docker logs cadvisor')"
 ok "cAdvisor scraping from VM-Mon"
 
 echo "== 6/6 Prometheus targets =="
