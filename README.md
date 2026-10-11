@@ -44,10 +44,26 @@ pulls the agent images, and verifies every link. Idempotent.
 ./run.sh
 ```
 
-The menu asks what to run (smoke / one level / full sweep / analyze only), which agent
-(vector / otel / both), and which load level (normal / medium / high / all).
-Start with the **smoke run** - one short rep that proves the pipeline; it is not thesis
-data. The full sweep needs a typed `yes`. Results stream live, then land in:
+### Menu parameters
+
+The menu asks for everything tunable. Start with the **smoke run** - one short rep that
+proves the pipeline; it is not thesis data. The full sweep needs a typed `yes`.
+
+| Parameter           | What it decides          | Meaning                                                                                                                 | Default            |
+| ------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| Mode                | what kind of session    | *smoke*: quick pipeline check (not thesis data) · *custom*: you pick reps/window · *sweep*: the real experiment · *analyze only*: re-generate stats from existing data, no new runs | -                  |
+| Agent(s)            | who is tested           | *both*: Vector and OTel alternately (ABBA: rep 1 V,O - rep 2 O,V ...) so host drift hits both equally · one arm for debugging | -                  |
+| Load level(s)       | how fast logs are written | *normal* 5,000 ev/s · *medium* 20,000 · *high* 50,000 · *all* runs the three in order                                   | sweep: all         |
+| Reps per cell       | how many repeats        | each agent x level combination is repeated n times; n = 5 makes the exact Mann-Whitney test able to reach p < 0.05       | smoke/custom: 1, sweep: 5 |
+| Warm-up seconds     | settle time             | agent starts and catches up on the log file; this period is thrown away so startup noise stays out of the data           | 10 (smoke) / 30    |
+| Measurement window  | the measured period     | CPU and memory figures are computed over exactly this window (O1/O2)                                                     | 30 (smoke) / 120   |
+| Resume mode         | continue after a break  | skips cells already recorded valid - use when a sweep got interrupted (reboot, dropped SSH) instead of redoing it all    | n                  |
+
+Fixed on purpose (controlled variables, not selectable): tier rates 5k/20k/50k ev/s,
+core pinning (agent cores 2-3, loggen core 0, sampler + cAdvisor core 1), ABBA arm
+order, and the 2x validity-retry rule.
+
+Results stream live, then land in:
 
 - `results/runs.csv` - one row per run (O1/O2, offered vs consumed eps, validity flags)
 - `results/summary.md` - per-tier table, ratios, exact Mann-Whitney, V5/V6 cross-check

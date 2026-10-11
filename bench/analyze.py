@@ -109,6 +109,9 @@ def main():
         return
 
     csv_path = os.path.join(g.root, "results", "runs.csv")
+    if not os.path.exists(csv_path):
+        print(f"no runs yet ({csv_path} missing) - run ./run.sh first")
+        return
     rows = list(csv.DictReader(open(csv_path)))
     out = []
     P = out.append
