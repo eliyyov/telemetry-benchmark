@@ -1,0 +1,5 @@
+arm,level,rep,attempt,status,rate_target,offered_eps,consumed_eps,consumed_ratio,cpu_mean_pct,cpu_max_pct,cpu_p95_pct,mem_peak_window_mib,mem_mean_window_mib,mem_peak_lifetime_mib,throttled_delta,oom_kill,v1_ok,v3_ok,v4_saturated,v10_ok,v11_ok,samples,agent_cpuset,started,finished
+vector,normal,1,1,valid,5000,5052.8,4999.5,0.9895,5.5993,6.1727,5.8879,19.07,17.79,21.21,0,0,True,True,False,True,True,30,2-3,2026-10-11T15:58:40+0000,2026-10-11T15:59:34+0000
+otel,normal,1,1,valid,5000,5056.4,4999.7,0.9888,1.3237,2.7469,2.2278,54.68,53.7,54.95,0,0,True,True,False,True,True,30,2-3,2026-10-11T15:59:34+0000,2026-10-11T16:00:24+0000
+otel,normal,2,1,valid,5000,5056.4,4999.8,0.9888,1.3536,2.9225,2.2222,54.63,53.07,54.63,0,0,True,True,False,True,True,30,2-3,2026-10-11T16:00:24+0000,2026-10-11T16:01:14+0000
+vector,normal,2,1,valid,5000,5062.7,4996.1,0.9868,5.5656,6.6811,6.1598,18.48,16.94,19.82,0,0,True,True,False,True,True,30,2-3,2026-10-11T16:01:14+0000,2026-10-11T16:02:09+0000
