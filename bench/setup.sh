@@ -49,12 +49,17 @@ ssh -o BatchMode=yes data 'for i in timberio/vector:0.59.0-debian otel/opentelem
 ok "bundle synced, images pulled (Vector 0.59.0-debian, OTel 0.162.0, cAdvisor 0.60.6)"
 
 echo "== 5/6 cAdvisor on VM-Data (core 1) =="
-ssh -o BatchMode=yes data 'cd bench && (docker compose -f compose.cadvisor.yml up -d >/dev/null 2>&1 || sg docker -c "docker compose -f compose.cadvisor.yml up -d" >/dev/null)'
-for i in $(seq 1 60); do
+ssh -o BatchMode=yes data 'cd bench && (docker compose -f compose.cadvisor.yml up -d || sg docker -c "docker compose -f compose.cadvisor.yml up -d")' \
+  || bad "cAdvisor compose up failed on VM-Data (see output above)"
+ssh -o BatchMode=yes data 'for i in $(seq 1 30); do [ "$(docker inspect -f "{{.State.Status}}" cadvisor 2>/dev/null)" = running ] && exit 0; sleep 2; done; exit 1' \
+  || bad "cAdvisor container not running on VM-Data (check: ssh data docker logs cadvisor)"
+for i in $(seq 1 120); do
   curl -sf "http://$DATA_IP:8080/metrics" 2>/dev/null | grep -q container_cpu_usage_seconds_total && break; sleep 2
 done
-curl -sf "http://$DATA_IP:8080/metrics" | grep -q container_cpu_usage_seconds_total \
-  || bad "cAdvisor not exposing container metrics on $DATA_IP:8080 after 120s (check 'ssh data docker logs cadvisor')"
+if ! curl -sf "http://$DATA_IP:8080/metrics" | grep -q container_cpu_usage_seconds_total; then
+  ssh -o BatchMode=yes data 'docker inspect cadvisor --format "started={{.State.StartedAt}} restarts={{.RestartCount}}"' 2>/dev/null || true
+  bad "cAdvisor up but no container metrics on $DATA_IP:8080 after 240s (started/restarts above; logs: ssh data docker logs cadvisor)"
+fi
 ok "cAdvisor scraping from VM-Mon"
 
 echo "== 6/6 Prometheus targets =="
