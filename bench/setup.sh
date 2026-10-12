@@ -9,6 +9,13 @@ dk() { docker "$@" 2>/dev/null || sg docker -c "docker $*"; }
 ok()  { echo "  [ok] $*"; }
 bad() { echo "  [FAIL] $*"; exit 1; }
 
+# self-heal: Windows checkouts can sync scripts with CRLF; normalize before anything runs
+for f in *.sh *.py; do
+  if [ -f "$f" ] && grep -q $'\r' "$f" 2>/dev/null; then
+    sed -i 's/\r$//' "$f"; echo "  [fix] normalized CRLF line endings: $f"
+  fi
+done
+
 echo "== 1/6 VM-Mon local checks =="
 command -v docker >/dev/null || bad "docker not installed (cloud-init may still be running)"
 dk info >/dev/null 2>&1 || bad "docker daemon not reachable"
@@ -38,7 +45,14 @@ for i in $(seq 1 30); do
   curl -sf http://127.0.0.1:9090/-/ready >/dev/null && break; sleep 2
 done
 curl -sf http://127.0.0.1:9090/-/ready >/dev/null || bad "Prometheus not ready"
-curl -sf http://127.0.0.1:3000/api/health >/dev/null || bad "Grafana not healthy"
+GRAF_OK=0
+for i in $(seq 1 60); do
+  curl -sf http://127.0.0.1:3000/api/health >/dev/null 2>&1 && { GRAF_OK=1; break; }; sleep 2
+done
+if [ "$GRAF_OK" != 1 ]; then
+  dk logs grafana 2>&1 | tail -15 || true
+  bad "Grafana not healthy after 120s (logs above)"
+fi
 ok "Prometheus :9090 and Grafana :3000 up (localhost only - use the SSH tunnel)"
 
 echo "== 4/6 Bench bundle + agent images on VM-Data =="
