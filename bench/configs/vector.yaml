@@ -12,10 +12,18 @@ sources:
     type: host_metrics
     scrape_interval_secs: 15
     collectors: [cpu, memory, disk, network, filesystem, load]
+transforms:
+  enrich:
+    type: remap
+    inputs: [logs]
+    drop_on_error: false
+    source: |
+      . = parse_json!(.message)
+      .processed = true
 sinks:
   discard:
     type: blackhole
-    inputs: [logs]
+    inputs: [enrich]
     print_interval_secs: 0
   metrics:
     type: prometheus_exporter
