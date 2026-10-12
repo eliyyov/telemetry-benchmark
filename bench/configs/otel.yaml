@@ -1,21 +1,34 @@
+extensions:
+  file_storage:
+    directory: /var/lib/otel/storage
+    create_directory: true
 receivers:
   file_log:
     include: [/logs/bench.log]
     start_at: beginning
+    storage: file_storage
   host_metrics:
     collection_interval: 15s
     root_path: /hostfs
     scrapers: {cpu: {}, memory: {}, disk: {}, network: {}, filesystem: {}, load: {}}
+processors:
+  transform/enrich:
+    log_statements:
+      - context: log
+        statements:
+          - set(body, ParseJSON(body))
+          - set(attributes["processed"], true)
 exporters:
   nop: {}
   prometheus:
     endpoint: "0.0.0.0:9599"
 service:
+  extensions: [file_storage]
   telemetry:
     metrics:
       level: normal
       readers:
         - pull: {exporter: {prometheus: {host: 0.0.0.0, port: 8888}}}
   pipelines:
-    logs: {receivers: [file_log], exporters: [nop]}
+    logs: {receivers: [file_log], processors: [transform/enrich], exporters: [nop]}
     metrics: {receivers: [host_metrics], exporters: [prometheus]}
