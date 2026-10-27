@@ -16,6 +16,10 @@ from fractions import Fraction
 
 MiB = 1048576
 TOL = 0.05  # V5/V6 relative tolerance on the arm total
+# minimum evidence the cAdvisor path must carry for a cross-check to mean anything
+MIN_CROSS_POINTS = 5      # a 120 s window at a 5 s step should give ~24
+MIN_CROSS_DISTINCT = 3    # a cumulative CPU counter must move
+MIN_CROSS_COVERAGE = 0.90 # the series must span >=90% of the window
 
 
 # ---------- exact two-sided Mann-Whitney (permutation over pooled values) ----------
@@ -78,6 +82,24 @@ def cross_check(run_dir):
     crows = [r for r in csv.DictReader(open(cj)) if ws <= float(r["ts"]) <= we]
     if len(srows) < 2 or len(crows) < 2:
         return None
+    # The cAdvisor path must carry real data before it can validate anything. A flat
+    # counter (one distinct value) or a series that stops early means Prometheus had
+    # no samples for that window: the comparison would be meaningless, so it must be
+    # reported as no_data rather than quietly passing.
+    cvals = [float(r["cpu_usage_seconds_total"]) for r in crows]
+    cspan = float(crows[-1]["ts"]) - float(crows[0]["ts"])
+    wspan = we - ws
+    reasons = []
+    if len(crows) < MIN_CROSS_POINTS:
+        reasons.append(f"{len(crows)} points")
+    if len(set(cvals)) < MIN_CROSS_DISTINCT:
+        reasons.append(f"{len(set(cvals))} distinct counter value")
+    if wspan <= 0 or cspan / wspan < MIN_CROSS_COVERAGE:
+        reasons.append(f"covers {100 * cspan / wspan:.0f}% of the window")
+    if reasons:
+        return {"verdict": "no_data", "reason": ", ".join(reasons),
+                "cpu_diff": None, "mem_diff": None,
+                "cpu_ok": False, "mem_ok": False}
     # CPU: mean % of one core from the cumulative counter on both paths
     def mean_cpu(rows, ts_k, cpu_k):
         dt = float(rows[-1][ts_k]) - float(rows[0][ts_k])
@@ -86,8 +108,9 @@ def cross_check(run_dir):
     c_cpu = mean_cpu(crows, "ts", "cpu_usage_seconds_total") * 100
     s_mem = statistics.mean(int(r["mem_current_bytes"]) for r in srows)
     c_mem = statistics.mean(float(r["mem_usage_bytes"]) for r in crows)
-    rel = lambda a, b: abs(a - b) / b if b else 0.0
-    return {"sampler_cpu": s_cpu, "cadvisor_cpu": c_cpu, "cpu_diff": rel(s_cpu, c_cpu),
+    rel = lambda a, b: abs(a - b) / b if b else float("inf")
+    return {"verdict": "ok" if (rel(s_cpu, c_cpu) <= TOL and rel(s_mem, c_mem) <= TOL) else "fail",
+            "sampler_cpu": s_cpu, "cadvisor_cpu": c_cpu, "cpu_diff": rel(s_cpu, c_cpu),
             "sampler_mem": s_mem / MiB, "cadvisor_mem": c_mem / MiB, "mem_diff": rel(s_mem, c_mem),
             "cpu_ok": rel(s_cpu, c_cpu) <= TOL, "mem_ok": rel(s_mem, c_mem) <= TOL}
 
@@ -174,8 +197,11 @@ def main():
                     continue
                 ok = cc["cpu_ok"] and cc["mem_ok"]
                 fails += 0 if ok else 1
+                if cc.get("verdict") == "no_data":
+                    P(f"| {arm} | {lv} | {rep} | - | - | no data ({cc['reason']}) — not a pass, re-export or re-run |")
+                    continue
                 P(f"| {arm} | {lv} | {rep} | {cc['cpu_diff']*100:.1f}% | {cc['mem_diff']*100:.1f}% "
-                  f"| {'pass' if ok else 'FAIL (repeat <=2x, then exclude)'} |")
+                  f"| {'pass' if ok else 'FAIL — outside the 5% tolerance'} |")
     if not any("pass" in l or "FAIL" in l for l in out):
         P("| - | - | - | run export_cadvisor.py first | - | - |")
     P("")

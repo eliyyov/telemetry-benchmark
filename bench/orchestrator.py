@@ -38,10 +38,17 @@ ENV = {
     "SAMPLER_CPUS": os.environ.get("SAMPLER_CPUS", "1"),
 }
 WARMUP, MEASURE, MAX_RETRIES = 30.0, 120.0, 2
+# Pinned sweep parameters. These are recorded into every run.json and every runs.csv
+# row, so a data file is self-describing: a smoke run (10 s / 30 s) can never be
+# mistaken for a sweep run (30 s / 120 s) after the fact.
+SWEEP = {"reps": 5, "levels": "normal,medium,high", "arms": "v,o", "resume": False,
+         "warmup_s": WARMUP, "measure_s": MEASURE}
 FIELDS = ["arm", "level", "rep", "attempt", "status", "rate_target", "offered_eps", "consumed_eps",
           "consumed_ratio", "cpu_mean_pct", "cpu_max_pct", "cpu_p95_pct", "mem_peak_window_mib",
           "mem_mean_window_mib", "mem_peak_lifetime_mib", "throttled_delta", "oom_kill",
           "v1_ok", "v3_ok", "v4_saturated", "v10_ok", "v11_ok", "samples", "agent_cpuset",
+          "warmup_s", "measure_s", "reps", "levels", "arms", "resume",
+          "loggen_cpus", "sampler_cpus",
           "started", "finished"]
 
 _DIRECT = subprocess.run("docker ps", shell=True, capture_output=True).returncode == 0
@@ -124,7 +131,10 @@ def run_once(arm, level, rep, attempt):
     d = os.path.join(RAW, a["name"], level, f"run{rep}")
     os.makedirs(d, exist_ok=True)
     rec = {"arm": a["name"], "level": level, "rep": rep, "attempt": attempt, "rate_target": rate,
-           "agent_cpuset": ENV["AGENT_CPUSET"], "started": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+           "agent_cpuset": ENV["AGENT_CPUSET"],
+           "loggen_cpus": ENV["LOGGEN_CPUS"], "sampler_cpus": ENV["SAMPLER_CPUS"],
+           **SWEEP,
+           "started": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
     print(f"  {a['name']:6s} {level:6s} rep {rep} (attempt {attempt}) ... ", end="", flush=True)
 
     teardown()
@@ -227,6 +237,8 @@ def main():
     g = ap.parse_args()
     WARMUP = g.warmup if g.warmup is not None else WARMUP
     MEASURE = g.measure if g.measure is not None else MEASURE
+    SWEEP.update(reps=g.reps, levels=g.levels, arms=g.arms, resume=bool(g.resume),
+                 warmup_s=WARMUP, measure_s=MEASURE)
     for p in (LOGS, RAW, RES):
         os.makedirs(p, exist_ok=True)
     arms = [x for x in g.arms.split(",") if x]
