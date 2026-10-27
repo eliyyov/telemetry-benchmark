@@ -1,18 +1,22 @@
-extensions:
-  file_storage:
-    directory: /var/lib/otel/storage
-    create_directory: true
+# Arm O on VM-Data. Equal work + equal durability with the Vector arm:
+#   work        - every line is parsed as JSON and gets processed: true, then discarded
+#   durability  - no event buffer on disk and NO checkpoint: the file is re-read from
+#                 the beginning on every run, like Vector (read_from: beginning +
+#                 ignore_checkpoints: true). file_storage is deliberately absent.
 receivers:
   file_log:
     include: [/logs/bench.log]
     start_at: beginning
-    storage: file_storage
   host_metrics:
     collection_interval: 15s
     root_path: /hostfs
     scrapers: {cpu: {}, memory: {}, disk: {}, network: {}, filesystem: {}, load: {}}
 processors:
   transform/enrich:
+    # error_mode stays at the default (propagate). The corpus is generated from
+    # corpus/template.json and is always valid JSON, so this branch is never taken;
+    # it is left explicit rather than switched to ignore, which would silently
+    # change what a malformed line does instead of failing the run loudly.
     log_statements:
       - context: log
         statements:
@@ -23,7 +27,6 @@ exporters:
   prometheus:
     endpoint: "0.0.0.0:9599"
 service:
-  extensions: [file_storage]
   telemetry:
     metrics:
       level: normal
