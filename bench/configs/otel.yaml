@@ -1,29 +1,181 @@
-extensions:
-  file_storage:
-    directory: /var/lib/otel/storage
-    create_directory: true
+# OTel Collector arm. Equal work + equal durability with the Vector arm:
+#   work        - every line is parsed as JSON, then enriched with the six
+#                 operations listed below, then discarded
+#   durability  - no event buffer on disk and NO checkpoint: the file is re-read
+#                 from the beginning on every run, like Vector
+#                 (read_from: beginning + ignore_checkpoints: true).
+#                 file_storage is deliberately absent.
+#
+# The six operations mirror vector.yaml statement for statement:
+#
+#   #  operation                target                            basis
+#   1  event time               time_unix_nano                    Logs Data Model
+#   2  severity from status     severity_text / severity_number   Data Model + RFC 9110 §15
+#   3  four renames             http.request.method               semconv, Stable
+#                               url.path                          semconv, Stable
+#                               http.response.status_code         semconv, Stable
+#                               network.protocol.version          semconv, Stable
+#   4  client address           client.address                    semconv, Stable
+#   5  PII removal              (drops user-identifier)           GDPR Art. 5(1)(c)
+#   6  static context           service.name                      semconv, Stable+Required
+#                               deployment.environment.name       semconv, Stable
+#
+# Operation 0 (processed) is a benchmark-internal marker, not a production
+# attribute; it is disclosed and excluded from the standardisation claim.
+#
+# Why this file is not line-for-line identical to vector.yaml
+# -----------------------------------------------------------
+# The two agents model an event differently, so the same six operations are
+# expressed with different amounts of work. The information added is identical;
+# the cost of expressing it is not, and that cost is what the study measures.
+#
+#   OTel Collector: a log is a typed record (resource, scope, body, attributes,
+#   timestamps, severity text AND number). There is no rename primitive, so a
+#   rename is set + delete_key; enrichment goes into the separate attribute map,
+#   which is a copy; body keeps the original line; the filelog receiver records
+#   its source automatically (log.file.name). Optimised for interoperability and
+#   semantic fidelity.
+#
+#   Vector: an event is a document you reshape. Rename = one del() (take the
+#   value, drop the old key); replacing the root costs nothing; nothing keeps a
+#   copy of the original line. Optimised for transformation cost and memory.
+#
+# Consequences visible in the numbers: 23 statements here vs 13 there, one field
+# copy here vs none there, severity stored twice (text + number) vs once,
+# ~98 MiB vs ~19 MiB per process. These are design consequences, not tuning
+# choices or handicaps.
+#
+# Scope of the scenario
+# ---------------------
+# This models the file-tailing case: an uninstrumented or legacy source whose
+# lines are collected and normalised by an agent, so per-event enrichment has to
+# happen in the pipeline because the application cannot emit it. Scenarios where
+# an OpenTelemetry SDK performs this work at emit time are out of scope.
+# The corpus is CLF-shaped content delivered as NDJSON, which no single real
+# source emits exactly; that is a declared limitation, not an oversight.
+#
+# Measurement path (identical on both arms)
+# -----------------------------------------
+# Same input file, same six host-metric scrapers at a 15 s interval
+# (cpu, memory, disk, network, filesystem, load), same nop exporter with no disk
+# buffer, same "no checkpoint, re-read from the beginning" durability.
+# Neither arm configures a batch processor, so every record traverses the
+# pipeline individually; no arm is advantaged by amortising work over a batch.
+#
+# Disclosed asymmetries, listed in one place rather than left in prose:
+#   - self-telemetry: Vector snapshots internal_metrics every 5 s; the OTel
+#     Collector is pulled by Prometheus at 15 s.
+#   - source metadata: the filelog receiver adds log.file.name to every record
+#     automatically (a Development attribute). Vector keeps file metadata
+#     outside the event document, so it adds no equivalent attribute.
+#
+# Deliberately excluded mappings
+# ------------------------------
+# `http.request.referrer` is not used: no such attribute exists in the semantic
+# convention registry. `http.response.body.size` is not used: it is only
+# Development, not Stable. `bytes` and `referer` are therefore left untouched in
+# both arms rather than mapped to unstable targets.
+#
+# PII note
+# --------
+# Dropping user-identifier is representative of a compliance-driven deployment
+# (GDPR Art. 5(1)(c) data minimisation). The corpus is synthetic, so this is
+# practice being modelled, not a legal obligation on this data.
+#
+# This transform supersedes the parse-and-flag transform introduced in 1e844d2.
+# Data produced before this revision (e.g. sweep-2026-10-18) was measured with
+# the earlier transform and is not comparable with runs from this file.
+#
+# Pairing rule
+# ------------
+# Both arms must be measured from the same commit of this config pair. A new
+# otel.yaml compared against an older vector.yaml run is not a comparison, it is
+# two unrelated measurements.
+#
+# Sources for the basis column
+# ----------------------------
+# Logs Data Model     https://opentelemetry.io/docs/specs/otel/logs/data-model/
+# semconv HTTP        https://opentelemetry.io/docs/specs/semconv/registry/attributes/http/
+# semconv URL         https://opentelemetry.io/docs/specs/semconv/registry/attributes/url/
+# semconv network     https://opentelemetry.io/docs/specs/semconv/registry/attributes/network/
+# semconv client      https://opentelemetry.io/docs/specs/semconv/registry/attributes/client/
+# semconv service     https://opentelemetry.io/docs/specs/semconv/resource/service/
+# semconv deployment  https://opentelemetry.io/docs/specs/semconv/registry/attributes/deployment/
+# RFC 9110 status     https://www.rfc-editor.org/rfc/rfc9110#name-status-codes
+# GDPR Art. 5(1)(c)   https://eur-lex.europa.eu/eli/reg/2016/679/oj
+# Log parsing context Zhu et al., ICSE-SEIP 2019, doi:10.1109/ICSE-SEIP.2019.00021
 receivers:
   file_log:
     include: [/logs/bench.log]
     start_at: beginning
-    storage: file_storage
   host_metrics:
     collection_interval: 15s
     root_path: /hostfs
     scrapers: {cpu: {}, memory: {}, disk: {}, network: {}, filesystem: {}, load: {}}
 processors:
   transform/enrich:
+    # error_mode stays at the default (propagate). The corpus is generated from
+    # corpus/template.json and is always valid JSON, so this branch is never
+    # taken; it is left explicit rather than switched to ignore, which would
+    # silently change what a malformed line does instead of failing the run loudly.
     log_statements:
       - context: log
         statements:
-          - set(body, ParseJSON(body))
+          # frame: lift the parsed fields into the attribute map so later
+          # statements can address them. body keeps the original line verbatim;
+          # Vector instead replaces its event root. This copy is work OTel pays
+          # and Vector does not - an engine difference, disclosed, not tuned away.
+          - merge_maps(attributes, ParseJSON(body), "upsert")
+
+          # (0) instrumentation marker only - not a production attribute
           - set(attributes["processed"], true)
+
+          # (1) event time: "02/Oct/2026:07:46:38 +0700" -> record Timestamp
+          - set(time_unix_nano, UnixNano(Time(attributes["datetime"], "%d/%b/%Y:%H:%M:%S %z")))
+          - delete_key(attributes, "datetime")
+
+          # (2) severity from the HTTP status class (RFC 9110 §15).
+          #     SeverityNumber 17 = ERROR, 13 = WARN, 9 = INFO.
+          #     The mapping rule is a study decision: the specification defines
+          #     the target field, not how an HTTP status should map onto it.
+          - set(severity_text, "ERROR") where Int(attributes["status"]) >= 500
+          - set(severity_text, "WARN")  where Int(attributes["status"]) >= 400 and Int(attributes["status"]) < 500
+          - set(severity_text, "INFO")  where Int(attributes["status"]) < 400
+          - set(severity_number, SEVERITY_NUMBER_ERROR) where Int(attributes["status"]) >= 500
+          - set(severity_number, SEVERITY_NUMBER_WARN)  where Int(attributes["status"]) >= 400 and Int(attributes["status"]) < 500
+          - set(severity_number, SEVERITY_NUMBER_INFO)  where Int(attributes["status"]) < 400
+
+          # (3) renames to Stable semantic-convention attributes. OTTL has no
+          #     rename converter, so each is set + delete_key (Vector: one del()).
+          #     request -> url.path is exact for this corpus: 0 of the 5 000
+          #     records contain a "?", so no url.query split is needed.
+          - set(attributes["http.request.method"], attributes["method"])
+          - delete_key(attributes, "method")
+          - set(attributes["url.path"], attributes["request"])
+          - delete_key(attributes, "request")
+          - set(attributes["http.response.status_code"], attributes["status"])
+          - delete_key(attributes, "status")
+          # registry wants the version alone: "HTTP/2.0" -> "2.0". Length 3
+          # matches every protocol value in the corpus (1.0 / 1.1 / 2.0).
+          - set(attributes["network.protocol.version"], Substring(attributes["protocol"], 5, 3))
+          - delete_key(attributes, "protocol")
+
+          # (4) client address: `host` is the client in CLF-style access logs
+          - set(attributes["client.address"], attributes["host"])
+          - delete_key(attributes, "host")
+
+          # (5) data minimisation: drop the user identity at the pipeline
+          - delete_key(attributes, "user-identifier")
+
+          # (6) static context. Resource-level in production; applied per record
+          #     here so both arms pay the same work.
+          - set(attributes["deployment.environment.name"], "production")
+          - set(attributes["service.name"], "bench")
 exporters:
   nop: {}
   prometheus:
     endpoint: "0.0.0.0:9599"
 service:
-  extensions: [file_storage]
   telemetry:
     metrics:
       level: normal
