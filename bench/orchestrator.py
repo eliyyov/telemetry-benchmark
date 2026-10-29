@@ -157,6 +157,12 @@ def run_once(arm, level, rep, attempt):
         teardown()
         return rec
 
+    # Record the container ID: every cell of an arm reuses the same container NAME,
+    # so the cAdvisor export cannot tell this run's container apart from the previous
+    # cell's corpse by name alone. The ID is the only unambiguous handle.
+    cid = dk(f"inspect {a['container']} --format '{{{{.Id}}}}'").stdout.strip().strip("'")
+    rec["container_id"] = cid
+
     total = WARMUP + MEASURE
     samp_csv = os.path.join(d, "cgroup_samples.csv")
     sampler = subprocess.Popen(["taskset", "-c", ENV["SAMPLER_CPUS"], sys.executable,

@@ -11,7 +11,7 @@ the same content:
 
 Usage: python3 analyze.py [--root .] [--selftest]
 """
-import argparse, csv, itertools, json, os, statistics
+import argparse, csv, itertools, json, math, os, statistics, sys
 from fractions import Fraction
 
 MiB = 1048576
@@ -68,7 +68,19 @@ def fmt_p(p):
 
 # ---------- cross-check ----------
 def cross_check(run_dir):
-    """V5/V6: compare cgroup sampler with cAdvisor for one run window."""
+    """V5/V6: compare cgroup sampler with cAdvisor for one run window.
+
+    Never raises: a malformed export is reported as no_data, because an exception here
+    would lose the whole summary at the end of a two-hour sweep.
+    """
+    try:
+        return _cross_check(run_dir)
+    except Exception as e:
+        return {"verdict": "no_data", "reason": f"unreadable files ({type(e).__name__})",
+                "cpu_diff": None, "mem_diff": None, "cpu_ok": False, "mem_ok": False}
+
+
+def _cross_check(run_dir):
     cj, sj = os.path.join(run_dir, "cadvisor_samples.csv"), os.path.join(run_dir, "cgroup_samples.csv")
     rj = os.path.join(run_dir, "run.json")
     if not (os.path.exists(cj) and os.path.exists(sj) and os.path.exists(rj)):
@@ -87,6 +99,13 @@ def cross_check(run_dir):
     # no samples for that window: the comparison would be meaningless, so it must be
     # reported as no_data rather than quietly passing.
     cvals = [float(r["cpu_usage_seconds_total"]) for r in crows]
+    # NaN and Inf are not measurements: drop them, and let the point count judge.
+    keep = [r for r, v in zip(crows, cvals) if math.isfinite(v)]
+    if len(keep) != len(crows):
+        crows, cvals = keep, [v for v in cvals if math.isfinite(v)]
+    if len(crows) < 2:
+        return {"verdict": "no_data", "reason": "non-finite cAdvisor values only",
+                "cpu_diff": None, "mem_diff": None, "cpu_ok": False, "mem_ok": False}
     cspan = float(crows[-1]["ts"]) - float(crows[0]["ts"])
     wspan = we - ws
     reasons = []
@@ -107,7 +126,8 @@ def cross_check(run_dir):
     s_cpu = mean_cpu(srows, "ts", "cpu_usage_usec") / 1e6 * 100
     c_cpu = mean_cpu(crows, "ts", "cpu_usage_seconds_total") * 100
     s_mem = statistics.mean(int(r["mem_current_bytes"]) for r in srows)
-    c_mem = statistics.mean(float(r["mem_usage_bytes"]) for r in crows)
+    cmem = [v for v in (float(r["mem_usage_bytes"]) for r in crows) if math.isfinite(v)]
+    c_mem = statistics.mean(cmem) if cmem else 0.0
     rel = lambda a, b: abs(a - b) / b if b else float("inf")
     return {"verdict": "ok" if (rel(s_cpu, c_cpu) <= TOL and rel(s_mem, c_mem) <= TOL) else "fail",
             "sampler_cpu": s_cpu, "cadvisor_cpu": c_cpu, "cpu_diff": rel(s_cpu, c_cpu),
@@ -128,6 +148,15 @@ def main():
         u, p = mann_whitney_exact([1, 2, 3, 4, 5], [6, 7, 8, 9, 10])
         assert p == Fraction(2, 252), p                                            # exact floor at 5v5
         assert mann_whitney_exact([10, 20, 30], [20, 30, 40])[1] == Fraction(10, 20)  # ties case, hand-enumerated
+        # The exporter and the analyser must demand the same evidence, or one of them
+        # is quietly validating a different thing than the other.
+        try:
+            import export_cadvisor as _x
+            assert (_x.MIN_POINTS, _x.MIN_DISTINCT, _x.MIN_COVERAGE) == (
+                MIN_CROSS_POINTS, MIN_CROSS_DISTINCT, MIN_CROSS_COVERAGE), "thresholds drifted"
+            print("selftest ok: export/analyze thresholds agree")
+        except ImportError:
+            print("selftest skip: export_cadvisor.py not importable")
         print("selftest ok: exact Mann-Whitney validated on 4 hand-computable cases")
         return
 
@@ -186,20 +215,34 @@ def main():
     P("| arm | level | rep | CPU diff | mem diff | verdict |")
     P("|---|---|---|---|---|---|")
     fails = 0
+    checked = 0
+    nodata = 0
+    missing = []
+    total = 0
     for arm in arms:
         for lv in levels:
             d0 = os.path.join(g.root, "raw_metrics", arm, lv)
             if not os.path.isdir(d0):
                 continue
             for rep in sorted(os.listdir(d0)):
+                total += 1
                 cc = cross_check(os.path.join(d0, rep))
                 if not cc:
+                    # No second meter for this run. That is a GAP, never a pass: an
+                    # absent check must not be counted as agreement.
+                    missing.append(f"{arm}/{lv}/{rep}")
+                    P(f"| {arm} | {lv} | {rep} | - | - | NOT CHECKED — "
+                      f"no cadvisor_samples.csv, re-export or re-run this cell |")
+                    continue
+                checked += 1
+                if cc.get("verdict") == "no_data":
+                    # no second meter = a gap. It must never be counted as a failure,
+                    # and never as agreement either.
+                    nodata += 1
+                    P(f"| {arm} | {lv} | {rep} | - | - | no data ({cc['reason']}) — not a pass, re-export or re-run |")
                     continue
                 ok = cc["cpu_ok"] and cc["mem_ok"]
                 fails += 0 if ok else 1
-                if cc.get("verdict") == "no_data":
-                    P(f"| {arm} | {lv} | {rep} | - | - | no data ({cc['reason']}) — not a pass, re-export or re-run |")
-                    continue
                 P(f"| {arm} | {lv} | {rep} | {cc['cpu_diff']*100:.1f}% | {cc['mem_diff']*100:.1f}% "
                   f"| {'pass' if ok else 'FAIL — outside the 5% tolerance'} |")
     if not any("pass" in l or "FAIL" in l for l in out):
@@ -217,7 +260,14 @@ def main():
               f"saturated(V4) {n('v4_saturated')}  V10 {n('v10_ok')}  V11 {n('v11_ok')}")
     excl = [r for r in rows if r["status"] == "excluded"]
     P(f"\nexcluded runs: {len(excl)}" + ("" if not excl else " -> " + ", ".join(f"{r['arm']}/{r['level']}/run{r['rep']}" for r in excl)))
-    P(f"\ncross-check failures: {fails}")
+    agree = checked - nodata - fails
+    P(f"\ncross-check (of {total} runs): {agree} agree within 5% · {nodata} no data · "
+      f"{fails} outside tolerance · {len(missing)} not checked")
+    if missing:
+        P("not checked (gaps, not passes): " + ", ".join(missing))
+    if len(missing) or nodata:
+        P("V5/V6 is therefore NOT evidence for those runs; the cgroup sampler and the "
+          "cAdvisor second opinion agree only where a row says pass.")
 
     text = "\n".join(out) + "\n"
     with open(os.path.join(g.root, "results", "summary.md"), "w") as fh:

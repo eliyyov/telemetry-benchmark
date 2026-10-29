@@ -82,6 +82,24 @@ if [ -n "$ARGS" ]; then
     case "$GO" in y|Y) ;; *) echo cancelled; exit 0 ;; esac
   fi
 
+  # Preflight: the second meter is the step that fails silently, so check it BEFORE
+  # burning 80+ minutes. No Prometheus / no cAdvisor target => no cross-check at all.
+  echo "== preflight: second meter (Prometheus + cAdvisor) =="
+  curl -sf http://127.0.0.1:9090/-/ready >/dev/null 2>&1 || {
+    echo "STOP: Prometheus is not reachable on :9090."
+    echo "      A sweep now would collect 30 runs with no cross-check data at all."
+    echo "      Fix: ./setup.sh, then start the sweep again."
+    exit 1
+  }
+  UP_JSON=$(curl -sfG http://127.0.0.1:9090/api/v1/query \
+              --data-urlencode 'query=up{job="cadvisor"}' 2>/dev/null || true)
+  if ! printf '%s' "$UP_JSON" | grep -qE '"value":\[[0-9.]+,"1"\]'; then
+    echo "STOP: the cadvisor scrape target is not up in Prometheus."
+    echo "      Fix: ssh data docker logs cadvisor  /  ./setup.sh, then retry."
+    exit 1
+  fi
+  echo "   ok: Prometheus ready, cadvisor target up"
+
   echo "== syncing bench bundle to VM-Data =="
   rsync -a --exclude logs --exclude results --exclude raw_metrics --exclude __pycache__ ./ data:bench/
   echo "== running on VM-Data (output streams below) =="
@@ -97,8 +115,17 @@ else
 fi
 
 echo "== cAdvisor cross-check export (V5/V6) =="
-python3 export_cadvisor.py || echo "(export skipped - is Prometheus up? run ./setup.sh)"
+XC=0
+python3 export_cadvisor.py || XC=1
 echo "== analysis =="
 python3 analyze.py
 echo
 echo "Done. Data: results/runs.csv, results/summary.md, raw_metrics/<arm>/<level>/runN/"
+
+if [ "$XC" = "1" ]; then
+  echo
+  echo "!! CROSS-CHECK INCOMPLETE — the runs listed as NOT CHECKED have no second meter."
+  echo "!! V5/V6 is not evidence for them. Repair with (no re-measurement needed):"
+  echo "!!   python3 export_cadvisor.py && python3 analyze.py"
+  exit 1
+fi
