@@ -46,6 +46,16 @@ BLOCKS = {
     "poll": [
         ("poll50", 5000, "vector-base.yaml", "otel-poll50.yaml"),
     ],
+    # same configs, same settings as the official sweep - to explain the gap
+    # between a 60 s diagnostic window and a 120 s official one
+    "verify": [
+        ("abl-full", 5000, "vector-base.yaml", "otel-base.yaml"),
+    ],
+    # source-only, corpus served from RAM instead of EBS: separates "Vector
+    # pays for file I/O" from "Vector pays for its own event model"
+    "tmpfs": [
+        ("abl-readonly-ram", 5000, "vector-readonly.yaml", "otel-readonly.yaml", "readonly-tmpfs"),
+    ],
 }
 
 FIELDS = ["block", "stage", "arm", "level", "rate", "rep", "attempt", "status",
@@ -76,13 +86,15 @@ def run_block(block, reps, warmup, measure):
     O.WARMUP, O.MEASURE = warmup, measure
 
     arms = ["v", "o"]
-    for level, rate, vcfg, ocfg in BLOCKS[block]:
+    for entry in BLOCKS[block]:
+        level, rate, vcfg, ocfg = entry[:4]
+        cstage = entry[4] if len(entry) > 4 else None
         O.LEVELS[level] = rate
         cfgs = {"v": os.path.join(CFG, vcfg), "o": os.path.join(CFG, ocfg)}
-        O.ARMS["v"].update(compose=compose_path("vector", vcfg.split(".")[0].split("-", 1)[-1]),
-                           container="v-vector")
-        O.ARMS["o"].update(compose=compose_path("otel", ocfg.split(".")[0].split("-", 1)[-1]),
-                           container="o-otel")
+        vstage = cstage or vcfg.split(".")[0].split("-", 1)[-1]
+        ostage = cstage or ocfg.split(".")[0].split("-", 1)[-1]
+        O.ARMS["v"].update(compose=compose_path("vector", vstage), container="v-vector")
+        O.ARMS["o"].update(compose=compose_path("otel", ostage), container="o-otel")
         print(f"== {block} / {level} ({rate} ev/s)  reps {reps}  "
               f"V={os.path.basename(cfgs['v'])} O={os.path.basename(cfgs['o'])}", flush=True)
 

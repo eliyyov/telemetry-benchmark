@@ -41,7 +41,7 @@ services:
       SYSFS_ROOT: /hostfs/sys
     volumes:
       - {cfg}:/etc/{dest}:ro
-      - {BENCH}/logs:/logs:ro
+      - {logs}:/logs:ro
       - /:/hostfs:ro
 """
 
@@ -108,9 +108,10 @@ def write(name, text):
     return path
 
 
-def compose(name, service, image, cname, cfg, dest, cmd):
+def compose(name, service, image, cname, cfg, dest, cmd, logs=None):
     return write(name, COMPOSE.format(service=service, image=image, cname=cname,
-                                      cfg=cfg, dest=dest, cmd=cmd, BENCH=BENCH))
+                                      cfg=cfg, dest=dest, cmd=cmd, BENCH=BENCH,
+                                      logs=logs or f"{BENCH}/logs"))
 
 
 def main():
@@ -131,6 +132,17 @@ def main():
                             cfg, "otelcol-contrib/config.yaml",
                             '"--config=/etc/otelcol-contrib/config.yaml"'))
         made.append(cfg)
+
+    # tmpfs variants: identical containers, corpus served from RAM instead of
+    # EBS. Used by the "tmpfs" block to separate file I/O from event building.
+    for arm, svc, img, cname, dest, cmd in (
+            ("vector", "vector", "timberio/vector:0.59.0-debian", "v-vector",
+             "vector/vector.yaml", '"--config", "/etc/vector/vector.yaml"'),
+            ("otel", "otel", "otel/opentelemetry-collector-contrib:0.162.0", "o-otel",
+             "otelcol-contrib/config.yaml", '"--config=/etc/otelcol-contrib/config.yaml"')):
+        made.append(compose(f"compose.{arm}.readonly-tmpfs.yml", svc, img, cname,
+                            os.path.join(OUT, f"{arm}-readonly.yaml"), dest, cmd,
+                            logs="/dev/shm/diag_corpus"))
 
     print(f"wrote {len(made)} files to {OUT}")
     for m in sorted(made):
