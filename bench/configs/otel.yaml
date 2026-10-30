@@ -108,6 +108,15 @@ receivers:
   file_log:
     include: [/logs/bench.log]
     start_at: beginning
+    # Read granularity, written down rather than left implicit. 16KiB is this
+    # version's documented default for initial_buffer_size; it is pinned here for
+    # traceability and to make the two arms comparable line by line, because the
+    # Vector arm is held to max_read_bytes: 16384 in the same study. Note the
+    # settings are not the same kind of thing: this is an initial size that grows
+    # as needed (up to max_log_size), while max_read_bytes is a hard per-file cap.
+    # Both arms therefore START at 16 KiB; the value is the default, not a tuning.
+    initial_buffer_size: 16KiB
+    max_log_size: 1MiB
   host_metrics:
     collection_interval: 15s
     root_path: /hostfs

@@ -110,6 +110,19 @@ sources:
     include: ["/logs/bench.log"]
     read_from: beginning
     ignore_checkpoints: true
+    # Per-file read slice, pinned to the granularity the OTel Collector uses by
+    # default. max_read_bytes is not a buffer size: it is the amount Vector takes
+    # from one file before moving to the next, a fairness control written for
+    # fleets of files (the docs say it exists to spread reads evenly across them).
+    # With a single file it becomes "take 2 KB, come straight back", and the
+    # stock default of 2048 B is 8x smaller than the OTel Collector's documented
+    # initial_buffer_size of 16 KiB, so the two arms did not start from the same
+    # read granularity. Swept on the LXC at 5000 ev/s, 3 reps: 2048 -> 7.55 % of
+    # one core, 8192 -> 6.93, 16384 -> 6.73, 32768 -> 6.68, 65536 -> 6.65, with
+    # the OTel arm unchanged at 6.81 %. The curve plateaus at 16 KiB (92 % of the
+    # gap closed), which is also the OTel Collector's documented default. No
+    # statement in the transform changes; only how many bytes one read requests.
+    max_read_bytes: 16384
   self:
     type: internal_metrics
     scrape_interval_secs: 5
