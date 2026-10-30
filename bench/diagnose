@@ -112,7 +112,7 @@ fi
 
 # --- run ------------------------------------------------------------------
 STAMP=$(date +%Y%m%d-%H%M%S)
-echo "== running blocks on VM-Data =="
+if [ "$LOCAL" = "1" ]; then echo "== running blocks here =="; else echo "== running blocks on VM-Data =="; fi
 for b in $BLOCKS; do
   echo "-- block: $b"
   if [ "$LOCAL" = "1" ]; then
