@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# diagnose - run the explanatory experiments, unattended, from VM-Mon.
+#
+#   cd ~/bench && ./diagnose --dry-run          # show the plan, measure nothing
+#   cd ~/bench && ./diagnose                    # all three blocks (~45 min)
+#   cd ~/bench && ./diagnose --only ablation    # one block
+#
+# What it does
+#   1. generates diagnostic configs into diag_cfg/ (the repo configs are never touched)
+#   2. preflight: Prometheus + cAdvisor, the same gate run.sh uses
+#   3. syncs the bundle to VM-Data and runs each block there via experiments/runner.py,
+#      which calls the SAME orchestrator.run_once the official sweep uses
+#   4. pulls the results back to diagnostics/<timestamp>/
+#   5. prints one table: where each agent spends its CPU
+#
+# A diagnostic run is not thesis data. It explains the thesis data.
+set -euo pipefail
+cd "$(dirname "$0")"
+if [ -f "$HOME/.bench_env" ]; then source "$HOME/.bench_env"; fi
+
+# EC2 defaults; an exported AGENT_CPUSET wins so the same script can be rehearsed
+# on the single-core LXC, where cpuset 2-3 does not exist and every cell would
+# fail closed as "agent not ready".
+ENVV="AGENT_CPUSET=2-3 AGENT_CORES=2 LOGGEN_CPUS=0 SAMPLER_CPUS=1"
+if [ -n "${AGENT_CPUSET:-}" ]; then
+  ENVV="AGENT_CPUSET=$AGENT_CPUSET AGENT_CORES=${AGENT_CORES:-2} LOGGEN_CPUS=${LOGGEN_CPUS:-0} SAMPLER_CPUS=${SAMPLER_CPUS:-1}"
+fi
+REPS=2; WARM=15; MEAS=60; DRY=0; ONLY=""; FORCE=0; LOCAL=0; NOPRE=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    --force)   FORCE=1 ;;
+    --local)   LOCAL=1 ;;
+    --no-preflight) NOPRE=1 ;;
+    --only)    ONLY="${2:-}"; shift ;;
+    --reps)    REPS="${2:-2}"; shift ;;
+    --warmup)  WARM="${2:-15}"; shift ;;
+    --measure) MEAS="${2:-60}"; shift ;;
+    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    *) echo "unknown option: $1"; exit 2 ;;
+  esac
+  shift
+done
+
+case "$ONLY" in
+  ""|ablation|crossing|poll) ;;
+  *) echo "STOP: --only must be ablation, crossing or poll"; exit 2 ;;
+esac
+
+BLOCKS=${ONLY:-"ablation crossing poll"}
+NRUNS=0; MIN=0
+if [ -z "$ONLY" ] || [ "$ONLY" = ablation ]; then NRUNS=$((NRUNS + 6 * REPS)); fi
+if [ -z "$ONLY" ] || [ "$ONLY" = crossing ]; then NRUNS=$((NRUNS + 4 * REPS)); fi
+if [ -z "$ONLY" ] || [ "$ONLY" = poll ];     then NRUNS=$((NRUNS + 2 * REPS)); fi
+MIN=$(python3 -c "print(f'{$NRUNS * ($WARM + $MEAS + 25) / 60:.0f}')")
+
+echo "=== diagnostics: why the two agents cost different amounts ==="
+echo "    blocks : $BLOCKS"
+echo "    plan   : $NRUNS runs, warm-up ${WARM}s, window ${MEAS}s, est. ${MIN} min"
+echo "    configs: diag_cfg/ (generated; configs/ in the repo stays untouched)"
+echo
+
+if [ "$DRY" = "1" ]; then
+  python3 experiments/make_configs.py
+  echo
+  echo "dry run: nothing started, nothing measured. Remove --dry-run to execute."
+  exit 0
+fi
+
+# --- guards ---------------------------------------------------------------
+if git rev-parse --git-dir >/dev/null 2>&1; then
+  if [ "$FORCE" != "1" ]; then
+    if [ -n "$(git status --porcelain -- configs orchestrator.py experiments 2>/dev/null)" ]; then
+      echo "STOP: tracked benchmark files are modified."
+      echo "      A diagnostic run against unknown configs is worse than no run."
+      echo "      Fix: git checkout -- .   (or pass --force if you know why)"
+      exit 1
+    fi
+  fi
+  BEHIND=$(git rev-list --count HEAD..@{u} 2>/dev/null || echo 0)
+  if [ "${BEHIND:-0}" -gt 0 ]; then
+    echo "STOP: $BEHIND commit(s) behind origin. Run: git pull --rebase"
+    exit 1
+  fi
+fi
+
+if [ "$NOPRE" = "1" ]; then
+  echo "== preflight skipped (--no-preflight): no cross-check data will exist =="
+else
+echo "== preflight: second meter (Prometheus + cAdvisor) =="
+curl -sf http://127.0.0.1:9090/-/ready >/dev/null 2>&1 || {
+  echo "STOP: Prometheus not reachable on :9090"; exit 1; }
+UP_JSON=$(curl -sfG http://127.0.0.1:9090/api/v1/query \
+            --data-urlencode 'query=up{job="cadvisor"}' 2>/dev/null || true)
+printf '%s' "$UP_JSON" | grep -qE '"value":\[[0-9.]+,"1"\]' || {
+  echo "STOP: cadvisor target not up in Prometheus"; exit 1; }
+echo "   ok: Prometheus ready, cadvisor target up"
+fi
+
+# --- configs + sync -------------------------------------------------------
+echo "== generating diagnostic configs =="
+python3 experiments/make_configs.py
+
+if [ "$LOCAL" = "1" ]; then
+  echo "== local mode: running here, no rsync, no ssh =="
+else
+  echo "== syncing bundle to VM-Data =="
+  rsync -a --exclude logs --exclude results --exclude raw_metrics \
+           --exclude diag_out --exclude __pycache__ ./ data:bench/
+fi
+
+# --- run ------------------------------------------------------------------
+STAMP=$(date +%Y%m%d-%H%M%S)
+if [ "$LOCAL" = "1" ]; then echo "== running blocks here =="; else echo "== running blocks on VM-Data =="; fi
+for b in $BLOCKS; do
+  echo "-- block: $b"
+  if [ "$LOCAL" = "1" ]; then
+    rm -f "diag_out/$b.csv"
+    env $ENVV python3 experiments/runner.py --block "$b" --reps "$REPS" \
+        --warmup "$WARM" --measure "$MEAS"
+  else
+    ssh -o BatchMode=yes data "cd bench && rm -f diag_out/$b.csv; \
+        $ENVV python3 experiments/runner.py --block $b --reps $REPS --warmup $WARM --measure $MEAS"
+  fi
+done
+
+# --- pull back ------------------------------------------------------------
+DEST="diagnostics/$STAMP"
+mkdir -p "$DEST"
+echo "== pulling results back to $DEST =="
+if [ "$LOCAL" = "1" ]; then
+  cp -a diag_out/. "$DEST/"
+else
+  rsync -a data:bench/diag_out/ "$DEST/"
+fi
+cp -a diag_cfg "$DEST/configs"
+if git rev-parse --git-dir >/dev/null 2>&1; then
+  git rev-parse --short HEAD > "$DEST/git_head.txt"
+fi
+echo "wrote $DEST/"
+
+# --- summarise ------------------------------------------------------------
+echo
+python3 experiments/summarise.py "$DEST"
+
+echo
+echo "Done. Explain, don't conclude: these runs say where the cost sits, not who wins."
