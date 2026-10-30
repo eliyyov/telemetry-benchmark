@@ -18,13 +18,21 @@ set -euo pipefail
 cd "$(dirname "$0")"
 if [ -f "$HOME/.bench_env" ]; then source "$HOME/.bench_env"; fi
 
+# EC2 defaults; an exported AGENT_CPUSET wins so the same script can be rehearsed
+# on the single-core LXC, where cpuset 2-3 does not exist and every cell would
+# fail closed as "agent not ready".
 ENVV="AGENT_CPUSET=2-3 AGENT_CORES=2 LOGGEN_CPUS=0 SAMPLER_CPUS=1"
-REPS=2; WARM=15; MEAS=60; DRY=0; ONLY=""; FORCE=0
+if [ -n "${AGENT_CPUSET:-}" ]; then
+  ENVV="AGENT_CPUSET=$AGENT_CPUSET AGENT_CORES=${AGENT_CORES:-2} LOGGEN_CPUS=${LOGGEN_CPUS:-0} SAMPLER_CPUS=${SAMPLER_CPUS:-1}"
+fi
+REPS=2; WARM=15; MEAS=60; DRY=0; ONLY=""; FORCE=0; LOCAL=0; NOPRE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY=1 ;;
     --force)   FORCE=1 ;;
+    --local)   LOCAL=1 ;;
+    --no-preflight) NOPRE=1 ;;
     --only)    ONLY="${2:-}"; shift ;;
     --reps)    REPS="${2:-2}"; shift ;;
     --warmup)  WARM="${2:-15}"; shift ;;
@@ -77,6 +85,9 @@ if git rev-parse --git-dir >/dev/null 2>&1; then
   fi
 fi
 
+if [ "$NOPRE" = "1" ]; then
+  echo "== preflight skipped (--no-preflight): no cross-check data will exist =="
+else
 echo "== preflight: second meter (Prometheus + cAdvisor) =="
 curl -sf http://127.0.0.1:9090/-/ready >/dev/null 2>&1 || {
   echo "STOP: Prometheus not reachable on :9090"; exit 1; }
@@ -85,29 +96,44 @@ UP_JSON=$(curl -sfG http://127.0.0.1:9090/api/v1/query \
 printf '%s' "$UP_JSON" | grep -qE '"value":\[[0-9.]+,"1"\]' || {
   echo "STOP: cadvisor target not up in Prometheus"; exit 1; }
 echo "   ok: Prometheus ready, cadvisor target up"
+fi
 
 # --- configs + sync -------------------------------------------------------
 echo "== generating diagnostic configs =="
 python3 experiments/make_configs.py
 
-echo "== syncing bundle to VM-Data =="
-rsync -a --exclude logs --exclude results --exclude raw_metrics \
-         --exclude diag_out --exclude __pycache__ ./ data:bench/
+if [ "$LOCAL" = "1" ]; then
+  echo "== local mode: running here, no rsync, no ssh =="
+else
+  echo "== syncing bundle to VM-Data =="
+  rsync -a --exclude logs --exclude results --exclude raw_metrics \
+           --exclude diag_out --exclude __pycache__ ./ data:bench/
+fi
 
 # --- run ------------------------------------------------------------------
 STAMP=$(date +%Y%m%d-%H%M%S)
 echo "== running blocks on VM-Data =="
 for b in $BLOCKS; do
   echo "-- block: $b"
-  ssh -o BatchMode=yes data "cd bench && rm -f diag_out/$b.csv; \
-      $ENVV python3 experiments/runner.py --block $b --reps $REPS --warmup $WARM --measure $MEAS"
+  if [ "$LOCAL" = "1" ]; then
+    rm -f "diag_out/$b.csv"
+    env $ENVV python3 experiments/runner.py --block "$b" --reps "$REPS" \
+        --warmup "$WARM" --measure "$MEAS"
+  else
+    ssh -o BatchMode=yes data "cd bench && rm -f diag_out/$b.csv; \
+        $ENVV python3 experiments/runner.py --block $b --reps $REPS --warmup $WARM --measure $MEAS"
+  fi
 done
 
 # --- pull back ------------------------------------------------------------
 DEST="diagnostics/$STAMP"
 mkdir -p "$DEST"
 echo "== pulling results back to $DEST =="
-rsync -a data:bench/diag_out/ "$DEST/"
+if [ "$LOCAL" = "1" ]; then
+  cp -a diag_out/. "$DEST/"
+else
+  rsync -a data:bench/diag_out/ "$DEST/"
+fi
 cp -a diag_cfg "$DEST/configs"
 if git rev-parse --git-dir >/dev/null 2>&1; then
   git rev-parse --short HEAD > "$DEST/git_head.txt"
