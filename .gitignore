@@ -14,3 +14,8 @@ __pycache__/
 
 # results ARE committed (thesis data), raw_metrics stays out
 !bench/results/
+
+# diagnostics: configs are generated per run, output is not thesis data
+bench/diag_cfg/
+bench/diag_out/
+bench/diagnostics/
