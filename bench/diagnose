@@ -142,40 +142,7 @@ echo "wrote $DEST/"
 
 # --- summarise ------------------------------------------------------------
 echo
-python3 - "$DEST" <<'PY'
-import csv, glob, os, statistics as st, sys
-
-dest = sys.argv[1]
-rows = []
-for f in sorted(glob.glob(os.path.join(dest, "*.csv"))):
-    rows += list(csv.DictReader(open(f)))
-
-def cpu(stage, arm):
-    v = [float(r["cpu_mean_pct"]) for r in rows
-         if r["stage"] == stage and r["arm"] == arm
-         and r["status"] in ("valid", "lower_bound") and r["cpu_mean_pct"]]
-    return (st.mean(v), len(v)) if v else (None, 0)
-
-stages = []
-for r in rows:
-    if r["stage"] not in stages:
-        stages.append(r["stage"])
-
-print("diagnostics summary")
-print(f"{'stage':14s} {'runs':>4s}  {'vector':>7s} {'otel':>7s} {'gap pp':>7s}")
-for s in stages:
-    v, nv = cpu(s, "vector")
-    o, no = cpu(s, "otel")
-    if v is None or o is None:
-        continue
-    print(f"{s:14s} {min(nv, no):>4d}  {v:7.2f} {o:7.2f} {v - o:+7.2f}")
-
-bad = [r for r in rows if r["status"] not in ("valid", "lower_bound")]
-print()
-print(f"cells: {len(rows)}  used: {len(rows) - len(bad)}  not usable: {len(bad)}")
-for r in bad:
-    print(f"  {r['block']}/{r['stage']}/{r['arm']}/rep{r['rep']}: {r['status']}")
-PY
+python3 experiments/summarise.py "$DEST"
 
 echo
 echo "Done. Explain, don't conclude: these runs say where the cost sits, not who wins."
