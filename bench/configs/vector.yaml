@@ -104,18 +104,18 @@
 # GDPR Art. 5(1)(c)   https://eur-lex.europa.eu/eli/reg/2016/679/oj
 # Log parsing context Zhu et al., ICSE-SEIP 2019, doi:10.1109/ICSE-SEIP.2019.00021
 data_dir: /var/lib/vector
+# smoke variant: self-telemetry surface removed
+api:
+  enabled: false
 sources:
   logs:
     type: file
     include: ["/logs/bench.log"]
     read_from: beginning
     ignore_checkpoints: true
-  self:
-    type: internal_metrics
-    scrape_interval_secs: 5
   host:
     type: host_metrics
-    scrape_interval_secs: 15
+    scrape_interval_secs: 60
     collectors: [cpu, memory, disk, network, filesystem, load]
 transforms:
   enrich:
@@ -171,5 +171,5 @@ sinks:
     print_interval_secs: 0
   metrics:
     type: prometheus_exporter
-    inputs: [host, self]
+    inputs: [host]
     address: "0.0.0.0:9598"
