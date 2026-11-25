@@ -1,3 +1,9 @@
-# Copy to terraform.tfvars and adjust.
+# Copy to terraform.tfvars and adjust. terraform.tfvars is gitignored.
 region = "ap-southeast-1"
-# allowed_ssh_cidr = "203.0.113.7/32"   # leave unset to use your current public IP
+
+# Who may SSH into VM-Mon. Leave unset to allow the public IP of whoever runs
+# terraform (resolved via checkip.amazonaws.com at plan time).
+# Comma-separate to allow more than one operator or network, e.g. the person
+# running the sweep and the machine that launches it:
+# allowed_ssh_cidr = "203.0.113.7/32,198.51.100.9/32"
+# allowed_ssh_cidr = "203.0.113.7/32"

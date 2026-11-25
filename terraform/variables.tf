@@ -23,7 +23,7 @@ variable "mon_instance_type" {
 }
 
 variable "allowed_ssh_cidr" {
-  description = "CIDR allowed to SSH into VM-Mon, e.g. 203.0.113.7/32. Leave empty to use your current public IP."
+  description = "CIDR(s) allowed to SSH into VM-Mon, e.g. 203.0.113.7/32. Comma-separate to allow several operators or networks. Leave empty to use the public IP of whoever runs terraform."
   type        = string
   default     = ""
 }
