@@ -28,6 +28,35 @@ Terraform prints `ssh_mon` - that is your entry point. It also uploads `bench/` 
 VM-Mon and writes `operator_key.pem` next to the .tf files. To destroy everything at the
 end: `terraform destroy`.
 
+### SSH access
+
+`allowed_ssh_cidr` accepts one address or a comma-separated list. Leave it unset and
+Terraform allows the public IP of whoever runs `terraform plan/apply` (resolved through
+`checkip.amazonaws.com`). Set it explicitly when more than one machine needs in, for
+example the operator's laptop plus the host that launches a sweep:
+
+```hcl
+allowed_ssh_cidr = "203.0.113.7/32,198.51.100.9/32"
+```
+
+Changing the value only updates the VM-Mon security group; the instances are not
+replaced. A blocked port 22 (timeout, not "connection refused") almost always means the
+caller's address is not in this list.
+
+### Current deployment (2026-11-25)
+
+| Output | Value |
+| --- | --- |
+| `mon_public_ip` | `54.169.49.162` |
+| `data_private_ip` | `10.42.1.110` |
+| `availability_zone` | `ap-southeast-1a` |
+| `ssh_mon` | `ssh -i ./operator_key.pem ubuntu@54.169.49.162` |
+| `grafana_tunnel` | `ssh -i ./operator_key.pem -L 3000:127.0.0.1:3000 ubuntu@54.169.49.162` |
+
+The operator key is not committed. It is written to `terraform/operator_key.pem` at apply
+time (gitignored); a copy for the host that drives the testbed lives outside the repo at
+`~/.ssh/operator_key_ap.pem`.
+
 ## 2. One-time setup (on VM-Mon)
 
 ```bash

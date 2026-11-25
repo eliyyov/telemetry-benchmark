@@ -8,7 +8,10 @@ data "http" "my_ip" {
 }
 
 locals {
-  ssh_cidr = var.allowed_ssh_cidr != "" ? var.allowed_ssh_cidr : "${chomp(data.http.my_ip[0].response_body)}/32"
+  # One or more operator addresses, comma-separated. Empty means "whoever runs terraform".
+  ssh_cidrs = var.allowed_ssh_cidr != "" ? [
+    for c in split(",", var.allowed_ssh_cidr) : trimspace(c)
+  ] : ["${chomp(data.http.my_ip[0].response_body)}/32"]
   # Both instance types must exist in the chosen AZ.
   azs = sort(tolist(setintersection(
     toset(data.aws_ec2_instance_type_offerings.data.locations),
@@ -92,7 +95,7 @@ resource "aws_security_group" "mon" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [local.ssh_cidr]
+    cidr_blocks = local.ssh_cidrs
   }
   egress {
     from_port   = 0
